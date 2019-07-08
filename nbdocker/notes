@@ -1,0 +1,5 @@
+- `patchfile` exists because ngspice does a memory check to warn you if you're over 90% utilization of available memory for your program, but how it queries available memory is busted. So there's just unmuteable warnings everywhere. fucking yay.
+- build the image with `docker build -t tagname .`
+- run it with `docker run -p 8888:8888 --mount src="C:\Users\Patrick Yeon\openlunar\ee-software\nbdocker\notebook",target="/home/user/notebooks",type=bind -it tagname` or whatever is appropriate for src because docker says screw you you can't have relative names there.
+  - If there's a problem about not sharing a drive, you need to share the drive with Docker in the Docker Desktop settings
+- log in to the image with `docker run -it --user root tagname bash`

@@ -1,0 +1,10 @@
+--- src/frontend/cpitf.c        2018-05-15 19:11:35.000000000 +0000
++++ cpitf.c     2019-05-30 23:54:28.798478100 +0000
+@@ -365,7 +365,6 @@
+  {
+     ft_setflag = FALSE;
+     ft_intrpt = FALSE;
+-    ft_ckspace();   /* check for max. data size (resource.c) */
+     ft_checkkids(); /* check for jobs (only if OK_ASPICE is defined, apsice.c) */
+     vec_gc();       /* remove vectors which do not have permanent flag set (vectors.c) */
+  }
