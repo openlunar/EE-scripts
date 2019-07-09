@@ -5,6 +5,8 @@ import serial
 import sys
 import time
 
+from pvcells import PVCell
+
 class E4350Exception(Exception):
     pass
 
@@ -68,36 +70,57 @@ if __name__ == '__main__':
     parser.add_argument('-a', '--address', help='E4350A address on GPIB bus', required=True)
     parser.add_argument('-f', '--infile',
                         help='IV curve input file ("V_in_Volts,I_in_A\\n")')
+    parser.add_argument('--calc', help='calculate and use an IV curve as --calc=Isc,Vmp,Imp,Voc,a')
     parser.add_argument('--sim', help='Simulator settings as --sim=Isc,Vmp,Imp,Voc')
+    parser.add_argument('--multiple', help='array format of style 5s2p', default='1s1p')
     parser.add_argument('-t', '--period', type=float, default=5,
                         help='logging period (seconds)')
     args = parser.parse_args()
-    if ((not (args.infile or args.sim)) or
-        (args.infile and args.sim)):
-        print('must provide one and only one of --sim or --infile')
+    if len([a for a in (args.infile, args.sim, args.calc) if a is not None]) != 1:
+        print('must provide one and only one of --sim or --infile or --calc')
         sys.exit(-1)
 
     ser = serial.Serial(args.port, 9600)
     sas = E4350(ser, args.address)
     sas.output_off()
 
-    if args.infile:
-        with open(args.infile) as f:
-            datlines = [line.strip().split(',') for line in f.readlines()
-                        if len(line.strip()) and not line.startswith('#')]
-            ivcurve = [(float(v.strip()), float(i.strip())) for v,i in datlines]
+    _, ser, _, par = re.match('((\\d*)s)?(\\d*)p', args.multiple).groups()
+    if ser is None and par is None:
+        raise Exception('argument to --multiple must be form NsMp for N cells in series, M in parallel')
+    ser = int(ser) if ser is not None else 1
+    par = int(par) if par is not None else 1
+
+    if args.sim:
+        isc, vmp, imp, voc = [float(s) for s in args.sim.split(',')]
         try:
-            sas.pt_mode()
-            sas.set_pts(ivcurve)
+            sas.sim_mode()
+            sas.sim_pts(isc * par, vmp * ser, imp * par, voc * ser)
             sas.output_on()
         except Exception as e:
             sas.output_off()
             raise e
     else:
+        if args.infile:
+            with open(args.infile) as f:
+                datlines = [line.strip().split(',') for line in f.readlines()
+                            if len(line.strip()) and not line.startswith('#')]
+                iv = [(float(v.strip()), float(i.strip())) for v,i in datlines]
+        else:
+            # calc mode
+            isc, vmp, imp, voc, a = [float(s) for s in args.calc.split(',')]
+            pvcell = PVCell(voc, vmp, imp, isc, a)
+            data = pvcell.iv_curve()
+            iv = list(zip(data['vout'], data['aout']))
+            while len(iv) > 4000:
+                # limit on table size in e4350 memory
+                # this may look like throwing away a lot of data, but the worst
+                # case still gives us 2000 points.
+                iv = [iv[n] for n in range(0, len(iv), 2)]
+        ivcurve = [(v * ser, i * par) for v,i in iv]
+
         try:
-            sas.sim_mode()
-            isc, vmp, imp, voc = [float(s) for s in args.sim.split(',')]
-            sas.sim_pts(isc, vmp, imp, voc)
+            sas.pt_mode()
+            sas.set_pts(ivcurve)
             sas.output_on()
         except Exception as e:
             sas.output_off()
@@ -114,4 +137,3 @@ if __name__ == '__main__':
         except Exception as e:
             sas.output_off()
             raise e
-
