@@ -18,7 +18,7 @@ class PVCell:
         self.tempco = {}
         for spec in tc_specs:
             if spec not in tempco:
-                raise ValueError('tempo must have specs: {}'.format(tc_specs))
+                raise ValueError('tempco must have specs: {}'.format(tc_specs))
             self.tempco[spec] = tempco[spec]
 
     def specs(self, temp=None):

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import argparse
 import math
+import re
 import serial
 import sys
 import time
@@ -11,42 +12,83 @@ class E4350Exception(Exception):
     pass
 
 class E4350:
-    def __init__(self, ser, addr):
+    def __init__(self, ser, addr, debug=False, fake=False, cautious=False):
         self.ser, self.addr = ser, addr
+        self.debug, self.fake, self.cautious = debug, fake, cautious
+        if fake:
+            return
         self.send('++mode 1')
         self.send('++addr {}'.format(addr))
         resp = self.send('*IDN?')
-        idn = resp.split(b',')
-        if len(idn) < 2 or idn[:2] != [b'HEWLETT-PACKARD', b'E4350A']:
+        idn = resp.split(',')
+        if len(idn) < 2 or idn[:2] != ['HEWLETT-PACKARD', 'E4350A']:
             raise E4350Exception('does not seem to be an E4350A: ' + str(resp))
 
     def send(self, msg):
+        if self.fake:
+            if self.debug:
+                print(msg)
+            return ''
         # writes the message, terminates it with a newline,
         #  reads and returns a response
         self.ser.write(bytes(msg + '\n', 'ascii'))
+        if self.debug:
+            print(msg)
         time.sleep(0.3)
-        return self.ser.read_all()
+        retval = self.ser.read_all().decode()
+        if self.debug:
+            print('>> ' + retval)
+        if self.cautious:
+            maybe_err = ''
+            while maybe_err == '':
+                self.ser.write(bytes('SYST:ERR?\n', 'ascii'))
+                time.sleep(0.3)
+                maybe_err = self.ser.read_all().decode()
+            non_err = ('+0,"No error"\n',
+                       '-420,"Query UNTERMINATED"\n')
+            if maybe_err not in non_err:
+                raise E4350Exception(maybe_err)
+        return retval
 
     def output_off(self):
-        self.send('OUTP:STAT OFF')
+        self.send('OUTP OFF')
 
     def output_on(self):
-        self.send('OUTP:STAT ON')
+        self.send('OUTP ON')
 
     def pt_mode(self):
         self.send('SOUR:CURR:MODE TABL')
 
     def set_pts(self, ptlist):
         # ptlist is [(float, float)...] of v,i points
-        self.send('MEM:DEL:NAME frompython') # no problem if it's not there
+        self.send('MEM:TABL:SEL foobar') # need to de-select frompython
+        try:
+            self.send('MEM:DEL:NAME frompython')
+        except E4350Exception as e:
+            if not str(e).startswith('-141'):
+                # -141 would be "table does not exist", which is fine
+                raise e
         self.send('MEM:TABL:SEL frompython')
+        # make sure the list is sorted, and there's no repeat of voltage points
+        ptlist.sort(key=lambda vi: vi[0])
+        trimpts, vpt, n, acc = [], int(100 * ptlist[0][0]), 1, ptlist[0][1]
+        for v,i in ptlist[1:]:
+            v = int(100 * v)
+            if v != vpt:
+                trimpts.append((vpt * 0.01, acc / n))
+                vpt, n, acc = v, 0, 0
+            n += 1
+            acc += i
+        trimpts.append((vpt * 0.01, acc / n))
+
         # limitation is that we need to do <=100 pts at a time
-        for i in range(0, math.ceil(len(ptlist) / 100)):
-            pts = ptlist[i * 100 : (i + 1) * 100]
-            self.send('MEM:VOLT ' + ','.join(['{:.2f}'.format(v)
-                                              for v,i in pts]))
-            self.send('MEM:CURR ' + ','.join(['{:.2f}'.format(i)
-                                              for v,i in pts]))
+        for n in range(0, math.ceil(len(trimpts) / 100)):
+            pts = trimpts[n * 100 : (n + 1) * 100]
+            self.send('MEM:TABL:VOLT ' + ','.join(['{:.3f}'.format(v)
+                                                   for v,i in pts]))
+            self.send('MEM:TABL:CURR ' + ','.join(['{:.3f}'.format(i)
+                                                   for v,i in pts]))
+        self.send('CURR:TABL:NAME frompython')
 
     def sim_mode(self):
         self.send('SOUR:CURR:MODE SAS')
@@ -58,6 +100,10 @@ class E4350:
         self.send('SOUR:VOLT:SAS:VMP {}'.format(vmp))
 
     def get_telem(self):
+        if self.fake:
+            self.send('MEAS:VOLT?')
+            self.send('MEAS:CURR?')
+            return {'v': 3.1415, 'i': 2.71828}
         # returns {'v': float, 'i': float} volts and amps
         return {'v': float(self.send('MEAS:VOLT?')),
                 'i': float(self.send('MEAS:CURR?'))
@@ -66,27 +112,38 @@ class E4350:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-n', '--nohardware', action='store_true')
     parser.add_argument('-p', '--port', help='prologix port', required=True)
-    parser.add_argument('-a', '--address', help='E4350A address on GPIB bus', required=True)
+    parser.add_argument('-a', '--address', help='E4350A address on GPIB bus',
+                        required=True)
     parser.add_argument('-f', '--infile',
                         help='IV curve input file ("V_in_Volts,I_in_A\\n")')
-    parser.add_argument('--calc', help='calculate and use an IV curve as --calc=Isc,Vmp,Imp,Voc,a')
-    parser.add_argument('--sim', help='Simulator settings as --sim=Isc,Vmp,Imp,Voc')
-    parser.add_argument('--multiple', help='array format of style 5s2p', default='1s1p')
+    parser.add_argument('--calc', help=('calculate and use an IV curve as '
+                                        '--calc=Isc,Vmp,Imp,Voc,a'))
+    parser.add_argument('--sim', help=('Simulator settings as '
+                                       '--sim=Isc,Vmp,Imp,Voc'))
+    parser.add_argument('--multiple', help='array format of style 5s2p',
+                        default='1s1p')
     parser.add_argument('-t', '--period', type=float, default=5,
                         help='logging period (seconds)')
     args = parser.parse_args()
-    if len([a for a in (args.infile, args.sim, args.calc) if a is not None]) != 1:
+    mutex_args = (args.infile, args.sim, args.calc)
+    if len([a for a in mutex_args if a is not None]) != 1:
         print('must provide one and only one of --sim or --infile or --calc')
         sys.exit(-1)
 
-    ser = serial.Serial(args.port, 9600)
-    sas = E4350(ser, args.address)
+    if args.nohardware:
+        sas = E4350(None, args.address, debug=args.verbose, fake=True)
+    else:
+        ser = serial.Serial(args.port, 9600)
+        sas = E4350(ser, args.address, debug=args.verbose, cautious=True)
     sas.output_off()
 
-    _, ser, _, par = re.match('((\\d*)s)?(\\d*)p', args.multiple).groups()
+    _, ser, _, par = re.match('((\\d*)s)?((\\d*)p)?', args.multiple).groups()
     if ser is None and par is None:
-        raise Exception('argument to --multiple must be form NsMp for N cells in series, M in parallel')
+        raise Exception('argument to --multiple must be form NsMp for N cells '
+                        'in series, M in parallel')
     ser = int(ser) if ser is not None else 1
     par = int(par) if par is not None else 1
 
@@ -110,6 +167,13 @@ if __name__ == '__main__':
             isc, vmp, imp, voc, a = [float(s) for s in args.calc.split(',')]
             pvcell = PVCell(voc, vmp, imp, isc, a)
             data = pvcell.iv_curve()
+
+            # This is a stupid thing because everything is horrible
+            def sigint(sig, frame):
+                raise KeyboardInterrupt()
+            import signal
+            signal.signal(signal.SIGINT, sigint)
+
             iv = list(zip(data['vout'], data['aout']))
             while len(iv) > 4000:
                 # limit on table size in e4350 memory
@@ -119,8 +183,9 @@ if __name__ == '__main__':
         ivcurve = [(v * ser, i * par) for v,i in iv]
 
         try:
-            sas.pt_mode()
+            sas.send('CURR:MODE FIX')
             sas.set_pts(ivcurve)
+            sas.pt_mode()
             sas.output_on()
         except Exception as e:
             sas.output_off()
@@ -133,6 +198,7 @@ if __name__ == '__main__':
             time.sleep(args.period)
         except KeyboardInterrupt as e:
             sas.output_off()
+            print('')
             break
         except Exception as e:
             sas.output_off()
