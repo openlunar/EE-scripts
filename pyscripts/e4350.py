@@ -13,6 +13,7 @@ class E4350Exception(Exception):
 
 class E4350:
     def __init__(self, ser, addr, debug=False, fake=False, cautious=False):
+        self.cmax, self.vmax = 5.25, 121. # for the E4350A-J06
         self.ser, self.addr = ser, addr
         self.debug, self.fake, self.cautious = debug, fake, cautious
         if fake:
@@ -58,6 +59,12 @@ class E4350:
 
     def pt_mode(self):
         self.send('SOUR:CURR:MODE TABL')
+
+    def set_protection(self, voltage=None, current=None):
+        if voltage is not None:
+            self.send('SOUR:VOLT:PROT {}'.format(min(voltage, self.vmax)))
+        if current is not None:
+            self.send('SOUR:CURR:PROT {}'.format(min(current, self.cmax)))
 
     def set_pts(self, ptlist):
         # ptlist is [(float, float)...] of v,i points
@@ -152,6 +159,7 @@ if __name__ == '__main__':
         try:
             sas.sim_mode()
             sas.sim_pts(isc * par, vmp * ser, imp * par, voc * ser)
+            sas.set_protection(voc * ser * 1.1, isc * par * 1.1)
             sas.output_on()
         except Exception as e:
             sas.output_off()
@@ -186,6 +194,8 @@ if __name__ == '__main__':
             sas.send('CURR:MODE FIX')
             sas.set_pts(ivcurve)
             sas.pt_mode()
+            sas.set_protection(max([v for v,i in ivcurve]) * 1.1,
+                               max([i for v,i in ivcurve]) * 1.1)
             sas.output_on()
         except Exception as e:
             sas.output_off()
