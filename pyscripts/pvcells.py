@@ -99,7 +99,8 @@ class PVCell:
                 res = ckt.simulator(temperature=(temp-zeroC)).operating_point()
                 _imin = float(res.branches['vrload_plus'])
         
-        results = self._sweep_res(ckt, rmin, rmax, temp)
+        results = self.Sweep_res(ckt, rmin, rmax, 'Rload', temp,
+                                 'out', 'vrload_plus')
         results['pout'] = [v * a for v,a in zip(results['vout'],
                                                 results['aout'])]
         results['Isc'] = results['aout'][0]
@@ -107,14 +108,17 @@ class PVCell:
         results['mpp'] = results['pout'].index(max(results['pout']))
         return results
 
-    def _sweep_res(self, circuit, rmin, rmax, temp):
+    @classmethod
+    def Sweep_res(cls, circuit, rmin, rmax, resistor, temp, voltage, current):
         rlo, rhi = rmin, rmax
         min_chg = 0.01
+        temp -= zeroC
         stack = [(rlo, rhi)]
         def calc(r):
-            circuit['Rload'].resistance = r
-            res = circuit.simulator(temperature=(temp - zeroC)).operating_point()
-            return (float(res.nodes['out']), float(res.branches['vrload_plus']))
+            circuit[resistor].resistance = r
+            res = circuit.simulator(temperature=temp).operating_point()
+            return (float(res.nodes[voltage]),
+                    float(res.branches[current]))
         
         def precise_enough(a, b, minabs=0.002, percent=0.03):
             for (ax, bx) in zip(a, b):
