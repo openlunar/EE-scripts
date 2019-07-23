@@ -20,7 +20,15 @@ class E4350:
             return
         self.send('++mode 1')
         self.send('++addr {}'.format(addr))
-        resp = self.send('*IDN?')
+        try:
+            resp = self.send('*IDN?')
+        except E4350Exception as e:
+            # sometimes there are errors that need to be queued, clear them?
+            for i in range(10):
+                err = self.send('SYST:ERR?')
+                if err.startswith('+0'):
+                    break
+            resp = self.send('*IDN?')
         idn = resp.split(',')
         if len(idn) < 2 or idn[:2] != ['HEWLETT-PACKARD', 'E4350A']:
             raise E4350Exception('does not seem to be an E4350A: ' + str(resp))
@@ -32,13 +40,13 @@ class E4350:
             return ''
         # writes the message, terminates it with a newline,
         #  reads and returns a response
-        self.ser.write(bytes(msg + '\n', 'ascii'))
         if self.debug:
             print(msg)
+        self.ser.write(bytes(msg + '\n', 'ascii'))
         time.sleep(0.3)
         retval = self.ser.read_all().decode()
         if self.debug:
-            print('>> ' + retval)
+            print('>> ' + retval.rstrip())
         if self.cautious:
             maybe_err = ''
             while maybe_err == '':
@@ -101,10 +109,8 @@ class E4350:
         self.send('SOUR:CURR:MODE SAS')
     
     def sim_pts(self, isc, vmp, imp, voc):
-        self.send('SOUR:CURR:SAS:ISC {}'.format(isc))
-        self.send('SOUR:CURR:SAS:IMP {}'.format(imp))
-        self.send('SOUR:VOLT:SAS:VOC {}'.format(voc))
-        self.send('SOUR:VOLT:SAS:VMP {}'.format(vmp))
+        cmd_str = 'SOUR:CURR:SAS:ISC {};IMP {};:VOLT:SAS:VOC {};VMP {}'
+        self.send(cmd_str.format(isc, imp, voc, vmp))
 
     def get_telem(self):
         if self.fake:
@@ -146,8 +152,8 @@ if __name__ == '__main__':
         ser = serial.Serial(args.port, 9600)
         sas = E4350(ser, args.address, debug=args.verbose, cautious=True)
     sas.output_off()
-
-    _, ser, _, par = re.match('((\\d*)s)?((\\d*)p)?', args.multiple).groups()
+    nsmp = re.match('((\\d*)[Ss])?((\\d*)[Pp])?', args.multiple)
+    _, ser, _, par = nsmp.groups()
     if ser is None and par is None:
         raise Exception('argument to --multiple must be form NsMp for N cells '
                         'in series, M in parallel')
@@ -159,7 +165,9 @@ if __name__ == '__main__':
         try:
             sas.sim_mode()
             sas.sim_pts(isc * par, vmp * ser, imp * par, voc * ser)
-            sas.set_protection(voc * ser * 1.1, isc * par * 1.1)
+            # it looks like even if I set a Voc, the SAS can go above that, so
+            #  not doing this bit for now
+            #sas.set_protection(voc * ser * 1.1, isc * par * 1.1)
             sas.output_on()
         except Exception as e:
             sas.output_off()
@@ -203,9 +211,11 @@ if __name__ == '__main__':
 
     while True:
         try:
+            tstart = time.time()
             dat = sas.get_telem()
             print('{}: {:.3f}V {:.3f}A'.format(time.time(), dat['v'], dat['i']))
-            time.sleep(args.period)
+            telapsed = time.time() - tstart
+            time.sleep(max(0, args.period - telapsed))
         except KeyboardInterrupt as e:
             sas.output_off()
             print('')
