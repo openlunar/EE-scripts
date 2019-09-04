@@ -47,7 +47,7 @@ class E4350:
         retval = self.ser.read_all().decode()
         if self.debug:
             print('>> ' + retval.rstrip())
-        if self.cautious:
+        if self.cautious and not msg.startswith('++'):
             maybe_err = ''
             while maybe_err == '':
                 self.ser.write(bytes('SYST:ERR?\n', 'ascii'))
@@ -121,6 +121,13 @@ class E4350:
         return {'v': float(self.send('MEAS:VOLT?')),
                 'i': float(self.send('MEAS:CURR?'))
                }
+
+    def set_display(self, txt=None):
+        if txt is None:
+            self.send('DISP:MODE NORM')
+        else:
+            self.send("DISP:TEXT '{}'".format(str(txt).upper()[:15]))
+            self.send('DISP:MODE TEXT')
     
 
 if __name__ == '__main__':
