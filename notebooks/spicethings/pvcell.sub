@@ -1,0 +1,7 @@
+.SUBCKT pvcell neg pos PARAMS: Illumination=1
+.model foo D (IS=8.131417763694951e-14 N=3.6 TNOM=25.0)
+Isrc neg internal DC {Illumination * 0.5220361930750081}
+Dfoo internal neg foo
+Rsh internal neg 292.43552202465725
+Rs internal pos 0.020276131769475635
+.ENDS pvcell
